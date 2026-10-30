@@ -137,6 +137,13 @@ def make_sounds():
             sounds['boomerang_throw'].set_volume(.5)
         except (pygame.error,OSError):
             pass
+    spear_path=Path(__file__).resolve().parent/'Assets/audio/spear_throw.wav'
+    if pygame.mixer.get_init() and spear_path.is_file():
+        try:
+            sounds['spear_throw']=pygame.mixer.Sound(str(spear_path))
+            sounds['spear_throw'].set_volume(.5)
+        except (pygame.error,OSError):
+            pass
     return sounds
 
 def wall(x, y):
@@ -490,7 +497,7 @@ class Game:
                 for clip in self.smg_sound_cache.values(): clip.stop()
                 self.smg_sound_cache[duration].play()
                 return
-            if name in ('shot2','shot3','sniper_bolt','boomerang_throw'): self.sounds[name].stop()
+            if name in ('shot2','shot3','sniper_bolt','boomerang_throw','spear_throw'): self.sounds[name].stop()
             if name=='shot3' and 'sniper_bolt' in self.sounds:
                 self.sounds['sniper_bolt'].stop()
             self.sounds[name].play()
