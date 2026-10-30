@@ -1,0 +1,72 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+*.egg
+dist/
+build/
+develop-eggs/
+downloads/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.manifest
+*.spec
+
+# ===== PyCharm / IDE =====
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.project
+.classpath
+.settings/
+
+# ===== 测试 / QA 产物 =====
+qa_screenshots/
+artifacts/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ===== 运行时 / 日志 =====
+*.log
+logs/
+*.tmp
+*.bak
+*.swp
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# ===== 本地环境 / 密钥 =====
+.env
+.env.local
+*.local
+config.local.py
+secrets.json
+
+# ===== 第三方运行时依赖（打包时解压，不入库）=====
+tools/audio_dependencies/
+tools/**/binaries/
