@@ -1,0 +1,2 @@
+# Text-only Apinebula generation; no reference image was uploaded.
+& 'C:\Users\qiezh\.codex\skills\apinebula-imagegen\run.ps1' -Prompt '游戏美术资源：一张4列4行精确等分的第一人称狙击步枪动画精灵图，纯洋红背景，无文字。全部16格是同一把蓝灰色长枪管、青色瞄准镜的虚构游戏狙击步枪，白袖深蓝手套，相同机位相同尺寸。第一行：待机、开火、后坐、右手拉栓。第二行：拉栓后移、拉栓复位、恢复待机、待机。第三行和第四行：连续8帧换弹，左手从枪身下方移出弹匣、拿新弹匣、从下方插回弹匣、回到护木。顶部瞄准镜和机匣保持完整不可插入弹匣。清晰日式游戏插画，透视和结构一致，各格严格独立不越界。' -OutFile 'Assets/Art/pixel_portal_v1/source/sniper_v14.png'

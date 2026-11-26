@@ -12,6 +12,7 @@ class EnemyArt:
                 for state,index in {'idle':8,'walk_left':0,'walk_right':4,'attack_ready':9,'attack_swing':10,'attack_recover':11,'hit':12,'dead':15}.items():
                     self.cloud[prefix+'_'+state]=self.cloud[f'{prefix}_cast3_{index}']
         self.cache={}
+        self.scaled_bounds={}
         self.positions={}
         self.anchors={}
         # Find physical foot rows once on tiny source sprites. Scanning every
@@ -109,13 +110,20 @@ class EnemyArt:
                 pose=0 if g.now<pattern['windup'] else 1 if g.now<pattern['impact'] else 2
                 if pattern.get('skill')=='laser' and pattern['windup']<=g.now<pattern['impact']: pose=3
             frame_key=f'{prefix}_v9_{pose}'
+        if e[5]=='boss' and prefix+'_v14_0' in source and state!='dead':
+            pose=0 if not pattern or g.now<pattern['windup'] else 1 if g.now<pattern['impact'] else 2
+            if pattern and pattern.get('skill')=='laser' and pattern['windup']<=g.now<pattern['impact']: pose=3
+            frame_key=f'{prefix}_v14_{pose}'
         # Shared canvas alignment means pose changes cannot move the feet.
         factor=4.6 if e[5]=='boss' else .65 if e[5]=='bat' else 1.3
         height=max(16,min(2048 if e[5]=='boss' else 1024,round(size*factor/16)*16)); width=height
         key=(frame_key,height)
         if key not in self.cache:
-            if len(self.cache)>384: self.cache.pop(next(iter(self.cache)))
+            if len(self.cache)>96:
+                removed=next(iter(self.cache)); self.cache.pop(removed)
+                self.scaled_bounds.pop(removed,None)
             self.cache[key]=pygame.transform.scale(source[frame_key],(width,height))
+            self.scaled_bounds[key]=self.cache[key].get_bounding_rect(min_alpha=128)
         image=self.cache[key]
         if e[5]!='boss' and e[3]-g.now>100:
             image=image.copy()
@@ -130,7 +138,7 @@ class EnemyArt:
             feet-=math.sin(phase*math.pi)*1.8/depth*g.screen.get_height()*.55*zoom
         if e[5]=='bat': feet-=.85/depth*g.screen.get_height()*.55*zoom
         elif e[5]=='boss' and prefix=='boss_ring': feet-=.18/depth*g.screen.get_height()*.55*zoom
-        bounds=image.get_bounding_rect(min_alpha=128)
+        bounds=self.scaled_bounds[key]
         rect=image.get_rect()
         # Ignore airborne particles when choosing the physical foot baseline.
         anchor=bounds.bottom
@@ -140,5 +148,8 @@ class EnemyArt:
             if state=='idle' and e[5]!='bat': anchor=bounds.bottom
         if e[5]=='boss' and prefix!='boss_ring':
             anchor=round(height*self.boss_source_anchors.get(frame_key,bounds.bottom/height))
+            if '_v9_' in frame_key or '_v14_' in frame_key:
+                # Prepared sheets share a fixed baseline at row 376/384.
+                anchor=round(height*376/384)
         rect.x=sx-(width//2 if '_locomotion_' in frame_key or '_cast3_' in frame_key else bounds.centerx); rect.y=round(feet)-anchor
         return image,rect

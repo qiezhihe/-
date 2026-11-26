@@ -1,5 +1,13 @@
 # 美术与音频授权记录
 
+2026-10-30 武器质变 V28：`source/weapon_evolutions_v28.png` 由用户配置的 Apinebula gpt-image-2 实际生成，来源 https://img-api.apinebula.ai/ ，账户许可、商用及署名条件未核实，不标记CC0。八张武器机制卡面，未上传参考图；导入脚本 `tools/prepare_weapon_evolutions_v28.py`，运行时 `runtime/icon_evo_*.png`。动态电弧、范围圈、剑气由程序绘制；紫色残影复用现有 `fx_dash.png`，沿用其原许可。
+
+2026-10-30 精力卡图标 V27：`source/energy_cards_v27.png`，项目通过用户配置 Apinebula gpt-image-2 生成，来源 https://img-api.apinebula.ai/ ，许可及商用条件未核实，不标为CC0。四个图标为精力核心、回能线圈、轻量步伐、闪现节流；导入 `tools/prepare_energy_cards_v27.py`，使用 `runtime/icon_anime_*`。未上传参考图。
+
+2026-10-30 机枪换弹 V16：用户配置的 Apinebula gpt-image-2 生成 `source/mg_reload_v16.png`（4×2八帧）；来源 https://img-api.apinebula.ai/ ，账户许可/商用及署名条件未核实，不标记为CC0。查看现有黑灰枪体、橄榄绿弹箱、金色弹链的v9帧后按外观文字描述生成，未上传参考图。提示词原文：`tools/redraw_mg_reload_v16.ps1`；导入：`tools/prepare_mg_reload_v16.py`；使用：`runtime/low_mg_reload_v16_0..7.png`。既有待机/开火素材和音频保持不变。
+
+2026-10-30 V14：`source/sniper_v14.png`，项目通过用户配置 Apinebula gpt-image-2 生成，来源 https://img-api.apinebula.ai/ ，账户适用许可、商用与署名条件未核实，不标为CC0。提示词原文：`tools/redraw_sniper_v14.ps1`；本次仅文字生成，未上传参考图。使用位置：`runtime/low_sniper_v14_0..15.png`，待机、开火、拉栓、下方弹匣换弹。另从已有 combat_v9_bosses.png 按真实行高重新切出 `runtime/anime_boss_*_v14_*.png` 共20张，沿用原图来源及许可，未生成新Boss原图。
+
 2026-10-30 低持冲锋枪/小幅举盾：`source/low_v8_smg.png`、`source/low_v8_guard.png`；项目 AI 生图，来源 https://img-api.apinebula.ai/ ，gpt-image-2；许可依账户条款，商用与署名未核实。用途：冲锋枪待机和刀盾格挡。提示词：`tools/redraw_low_v8.ps1`。删除已确认含女性角色的旧 Boss 蓄力/砸地八帧，恢复备份：`artifacts/art_cleanup/wrong_character_boss_fx.zip`。
 
 2026-10-30 长矛与刀盾完整重构：`source/melee_v7_spear.png`、`source/melee_v7_sword.png`；项目 AI 生图，来源 https://img-api.apinebula.ai/ ，gpt-image-2；许可依账户服务条款，商用及署名条件未核实。各 16 帧，使用于 `runtime/low_spear_*`、`low_sword_*` 与武器图标。完整提示词：`tools/redraw_melee_v7.ps1`；导入工具：`tools/prepare_melee_v7.py`。
@@ -36,10 +44,18 @@ V10 连杀九宫格：用户配置 Apinebula gpt-image-2 生图，source/kill_me
 
 机枪开枪音效：用户提供《机枪开枪声.m4a》，转换为 Assets/audio/machinegun_shot.wav（单声道 44100Hz PCM，约2.22秒）。替换 shot2，音量0.4，连续开枪重触发以避免长采样叠音；原始文件未修改。
 
+机枪起音修复：从上述录音约0.1915秒处提取0.125秒单发，保存为 Assets/audio/machinegun_shot_single.wav，尾部8毫秒淡出；shot2 使用此文件，移除机枪合成枪声生成，保留原完整录音备查。
+
 所有枪械换弹声：用户提供《换弹声.m4a》，转换为 Assets/audio/gun_reload.wav（约4.672秒，44100Hz单声道PCM）。运行时按当前换弹时长重采样，随速度改变音调；缓存最多16种时长。替换完整换弹音效，关闭旧分段插弹/拉栓音效，切枪取消、暂停跟随、支持静音。
 
 冲锋枪开枪声：用户提供《冲锋枪枪声.m4a》，转换 Assets/audio/smg_shot.wav（0.704秒，44100Hz单声道PCM）。每次实际射击触发，保留原音调与起音，按实际射击间隔截短尾音并以5ms淡出；适配射速强化/临时加速/35ms下限，缓存最多24个时长，避免叠音。
 
+冲锋枪连射修订：从原录音约0.0359秒处提取70毫秒单发，保存为 Assets/audio/smg_shot_single.wav；使用保留的专用声道0，每次实际射击重触发并按35至70毫秒处理尾音。移除已被用户录音替换的冲锋枪、机枪、狙击枪合成开枪音效及旧通用shot；文件缺失时不回退旧枪声。保留尚无替代录音的霰弹枪及其他游戏提示音。
+
 回旋镖音效：用户提供《回旋镖.mp3》，转换为 Assets/audio/boomerang_throw.wav（约0.85秒，44100Hz单声道PCM），在实际投掷回旋镖时播放，音量0.5，重新投掷时避免同音效叠加。原始文件未修改。
 
 长矛抛掷音效：用户提供《长矛抛掷.mp3》，转换为 Assets/audio/spear_throw.wav（约1.059秒，44100Hz单声道PCM），在实际抛掷长矛时播放，音量0.5，重新抛掷时避免同音效叠加。原始文件未修改。
+
+长矛接回音效：用户提供《拿到长矛.mp3》，转换为 Assets/audio/spear_catch.wav（约0.263秒，44100Hz单声道PCM），在返回长矛实际被接住并移除飞行物时播放一次，音量0.5，遵循静音设置。原始文件未修改。
+
+连杀播报：用户提供《一杀.m4a》《二杀.m4a》《三杀.m4a》《四杀.m4a》《五杀以及后续杀.m4a》，转换为 Assets/audio/kill_1.wav 至 kill_5.wav（44100Hz单声道PCM）。一至四杀对应播放，五杀及以上使用 kill_5；沿用1000毫秒连杀窗口，批量击杀播报最终连杀数，新播报替换上一条，遵循静音设置，音量0.65。原始文件未修改。

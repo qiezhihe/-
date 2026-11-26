@@ -13,7 +13,7 @@ for index,skill in enumerate(('hammer','hunt','snipe','brood','duel')):
         g.wave=(index+1)*5; g.player=[14.,14.]; g.hp=1000
         e=[10.,14.,400 if enraged else 1000,0,1000,'boss',999999]
         g.enemies=[e]; g.projectiles=[]; g.combat.boss_pattern.clear()
-        g.combat.boss_cycles[id(e)]=0
+        g.combat.boss_cycles[id(e)]=1 if skill=='snipe' else 0
         assert g.combat.boss_attack(e,1000)
         pattern=g.combat.boss_pattern[id(e)]
         assert pattern['skill']==skill

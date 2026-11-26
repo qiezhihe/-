@@ -85,13 +85,14 @@ class MeleeTests(unittest.TestCase):
     def test_laser_jump_and_windup_are_safe(self):
         g=self.g; g.wave=15; g.enemies=[]
         e=self.enemy(10,14); c=g.combat
-        c.boss_cycles[id(e)]=1; c.boss_attack(e,1000)
+        c.boss_cycles[id(e)]=0; c.boss_attack(e,1000)
+        start=c.boss_pattern[id(e)]['windup']
         hp=g.hp
-        c.update(.016,1500)
+        c.update(.016,start-1)
         self.assertEqual(g.hp,hp)
-        g.z=.6; c.update(.016,2100)
+        g.z=.6; c.update(.016,start)
         self.assertEqual(g.hp,hp)
-        g.z=0; c.update(.016,2100)
+        g.z=0; c.update(.016,start)
         self.assertLess(g.hp,hp)
 
     def test_navigation_routes_around_wall(self):

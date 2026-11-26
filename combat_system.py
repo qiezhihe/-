@@ -6,11 +6,83 @@ without this module (all methods simply return False when unavailable).
 """
 import math, random
 try:
-    from rogue_content import WEAPONS
+    from rogue_content import WEAPONS, BOSS_DESIGNS, BOSS_TELEGRAPH
 except Exception:
     WEAPONS = []
 
 class CombatSystem:
+    SLAM_RADIUS=1.65
+    HUNT_RADIUS=1.7
+    DUEL_RADIUS=3.3
+    CHARGE_RADIUS=1.35
+    LASER_HALF_WIDTH=.45
+    SNIPE_HALF_WIDTH=.35
+    LASER_LENGTH=18
+    LASER_AREA_RADIUS=1.35
+    WINDUP_COMMON=900
+    WINDUP_SIGNATURE=1200
+    WINDUP_ENRAGED=800
+
+    @staticmethod
+    def laser_state(pattern, now):
+        """Analytic forward / pause / reverse motion, shared by hits and visuals."""
+        if not pattern.get('array'):
+            elapsed=max(0,min(1,(now-pattern['windup'])/1600))
+            return pattern['angle']+elapsed*math.pi*1.5,1,False
+        duration=pattern['impact']-pattern['windup']
+        pause=1000
+        turn=(duration-pause)/2
+        elapsed=max(0,min(duration,now-pattern['windup']))
+        travel=min(elapsed,turn)-max(0,elapsed-turn-pause)
+        speed=pattern.get('rotation_speed',.14)
+        angle=pattern['angle']+travel/1000*speed
+        direction=1 if elapsed<turn else 0 if elapsed<turn+pause else -1
+        warning=now>=pattern['windup'] and turn-900<=elapsed<turn+pause
+        return angle,direction,warning
+
+    def laser_rays(self, pattern, now):
+        angle,_,_=self.laser_state(pattern,now)
+        count=pattern.get('beam_count',1)
+        return [angle+i*math.tau/count for i in range(count)]
+
+    def _update_laser(self, enemy, pattern, now):
+        if now>=pattern['impact']: return
+        origin=pattern['origin']; p=self.g.player
+        width=pattern.get('beam_half_width',self.LASER_HALF_WIDTH)
+        dx,dy=p[0]-origin[0],p[1]-origin[1]
+        # At the edge of the arena even the enraged beam travels at <3 m/s;
+        # unupgraded walking speed is 3.2 m/s. No mandatory jumping or sprint.
+        if now>=pattern.get('damage_at',0) and abs(self.g.z)<.26 and self._los(origin,p):
+            for angle in self.laser_rays(pattern,now):
+                along=dx*math.cos(angle)+dy*math.sin(angle)
+                across=abs(-dx*math.sin(angle)+dy*math.cos(angle))
+                if 0<along<self.LASER_LENGTH and across<width:
+                    self.g.hurt(12,source=origin);pattern['damage_at']=now+650
+                    break  # Crossing beams cannot stack damage in one tick.
+        if not pattern.get('array'):return
+        zones=pattern.setdefault('zones',[])
+        zones[:]=[zone for zone in zones if now<zone['end']]
+        if now>=pattern.get('next_throw',pattern['windup']+600) and now+2350<pattern['impact']:
+            # Snapshot, never a homing marker. Spawn from NOW after a lag spike,
+            # not from an expired scheduled time, preserving the full warning.
+            zones.append(dict(target=tuple(p),start=now,land=now+1250,end=now+2350,hit=False))
+            pattern['next_throw']=now+1800
+        for zone in zones:
+            if now>=zone['land'] and not zone['hit']:
+                zone['hit']=True
+                if math.dist(p,zone['target'])<self.LASER_AREA_RADIUS and self.g.z<.4 and self._los(zone['target'],p):
+                    self.g.hurt(14,source=zone['target'])
+
+    def laser_status(self, pattern, now):
+        if now<pattern['windup']:return '激光阵列蓄力 · 离开光带，保持移动'
+        _,direction,warning=self.laser_state(pattern,now)
+        if warning:return '激光即将反转 · 停顿后反向扫射'
+        return ('顺时针' if direction>0 else '逆时针')+'缓扫 · 绕行光束，离开落点圈'
+
+    @staticmethod
+    def hammer_radius(stage):
+        return 2.6+stage*.45
+
     def __init__(self, game):
         self.g = game; self.active=[]; self.cooldown=0; self.guard=False
         self.dash_until=0; self.boss_pattern={}; self.throws=[]; self.boss_cycles={}; self.boss_impacts=[]
@@ -48,6 +120,8 @@ class CombatSystem:
         p=getattr(self.g,'player',[0,0]); ang=getattr(self.g,'angle',0); idx=getattr(self.g,'weapon_index',4)
         # One physical boomerang: holding attack must not spawn another before catch.
         if idx in (5,6) and any(s['kind']==('boomerang' if idx==5 else 'spear') for s in self.throws): return True
+        if idx==7 and not self.g.spend_stamina(self.g.blink_stamina_cost,now):
+            self.g.message='精力不足，无法闪现'; return True
         self.cooldown=now+max(120,getattr(self.g,'fire_delay',w.get('delay',420)))
         self.g.weapon_action_start=now
         self.g.sound(('sword_swing','boomerang_throw','spear_throw','dagger_dash')[idx-4])
@@ -56,9 +130,12 @@ class CombatSystem:
             for e in self._enemies():
                 d=math.hypot(e[0]-p[0],e[1]-p[1]); rel=abs((math.atan2(e[1]-p[1],e[0]-p[0])-ang+math.pi)%(2*math.pi)-math.pi)
                 if d<=w.get('range',2.2)*(1+min(1,self.g.extras.get('melee_reach',0))) and rel<=arc/2 and self._los(p,e): self._hit(e,self.g.damage,now)
+            self.g.evolutions.sword(now)
             self.active.append(('slash',now+180,ang)); return True
         if idx==5: # returning boomerang
-            self.throws.append(dict(kind='boomerang',start=now,x=p[0],y=p[1],ox=p[0],oy=p[1],angle=ang,damage=self.g.damage,return_bonus=self.g.extras.get('boomerang_return',0),hits=set())); return True
+            for offset in ((-.38,0,.38) if self.g.evolutions.has(5) else (0,)):
+                self.throws.append(dict(kind='boomerang',start=now,x=p[0],y=p[1],ox=p[0],oy=p[1],angle=ang+offset,damage=self.g.damage*(.7 if offset else 1),return_bonus=self.g.extras.get('boomerang_return',0),hits=set()))
+            return True
         if idx==6: # penetrating spear
             self.throws.append(dict(kind='spear',start=now,x=p[0],y=p[1],ox=p[0],oy=p[1],angle=ang,damage=self.g.damage*(1+self.g.extras.get('spear_pierce',0)),hits=set())); return True
         if idx==7: # blink and strike
@@ -71,6 +148,7 @@ class CombatSystem:
             for e in self._enemies():
                 if any(math.hypot(e[0]-x,e[1]-y)<=.55 and self._los((x,y),e) for x,y in path):
                     self._hit(e,self.g.damage*(1+bonus),now)
+            self.g.evolutions.dagger(path,self.g.damage*(1+bonus))
             self.active.append(('dash',now+160,ang)); return True
         return True
     def update(self, dt, now):
@@ -93,13 +171,14 @@ class CombatSystem:
             if shot['kind']=='boomerang' and age>=1.2: continue
             a=shot['angle']; old=(shot['x'],shot['y'])
             if shot['kind']=='boomerang':
-                t=min(1,age/1.2); reach=6*reach_bonus*math.sin(math.pi*t); curve=2*math.sin(2*math.pi*t)
+                t=min(1,age/1.2); reach=WEAPONS[5]['range']*reach_bonus*math.sin(math.pi*t); curve=2*math.sin(2*math.pi*t)
                 x=shot['ox']*(1-t)+p[0]*t+math.cos(a)*reach-math.sin(a)*curve
                 y=shot['oy']*(1-t)+p[1]*t+math.sin(a)*reach+math.cos(a)*curve
             else:
                 if age>3: continue
                 limit=WEAPONS[6]['range']*reach_bonus
                 if not shot.get('returning') and math.hypot(old[0]-shot['ox'],old[1]-shot['oy'])>=limit-.001:
+                    self.g.evolutions.spear_anchor(shot)
                     shot['returning']=True
                 if shot.get('returning'):
                     distance=math.hypot(p[0]-old[0],p[1]-old[1])
@@ -107,6 +186,7 @@ class CombatSystem:
                         # Finish exactly once: the projectile is caught and
                         # removed, so holding attack cannot duplicate it.
                         shot['caught']=True
+                        self.g.sound('spear_catch')
                         continue
                     x=old[0]+(p[0]-old[0])/distance*dt*18
                     y=old[1]+(p[1]-old[1])/distance*dt*18
@@ -115,6 +195,7 @@ class CombatSystem:
                     x=old[0]+math.cos(a)*step; y=old[1]+math.sin(a)*step
             if not self._los(old,(x,y)):
                 if shot['kind']=='spear' and not shot.get('returning'):
+                    self.g.evolutions.spear_anchor(shot)
                     shot['returning']=True; throws.append(shot)
                     continue
                 if shot['kind']=='spear' and shot.get('returning'):
@@ -131,6 +212,7 @@ class CombatSystem:
                 if pass_id not in shot['hits'] and math.hypot(e[0]-contact[0],e[1]-contact[1])<.4 and (shot.get('returning') or self._los(contact,e)):
                     bonus=shot.get('return_bonus',0) if shot['kind']=='boomerang' and age>.6 else 0
                     self._hit(e,shot['damage']*(1+bonus),now); shot['hits'].add(pass_id)
+                    if shot['kind']=='spear': self.g.evolutions.spear_anchor(shot,contact)
             shot.setdefault('trail',[]).append(old)
             shot['trail']=shot['trail'][-10:]
             shot['x']=x; shot['y']=y; throws.append(shot)
@@ -153,18 +235,12 @@ class CombatSystem:
                 if dash.get('skill')=='slam':
                     if now>=dash['impact'] and not dash['hit']:
                         dash['hit']=True
-                        self.boss_impacts.append((*dash['target'],'slam',now+650))
-                        if math.hypot(p[0]-dash['target'][0],p[1]-dash['target'][1])<1.65 and self.g.z<.4 and self._los(enemy,p): self.g.hurt(22)
+                        self.boss_impacts.append((*dash['target'],'slam',now+650,self.SLAM_RADIUS))
+                        if math.hypot(p[0]-dash['target'][0],p[1]-dash['target'][1])<self.SLAM_RADIUS and self.g.z<.4 and self._los(enemy,p): self.g.hurt(22,source=dash['target'])
                     if now>=dash['recover']: self.boss_pattern.pop(id(enemy),None)
                     continue
                 if dash.get('skill')=='laser':
-                    elapsed=min(1,(now-dash['windup'])/1600)
-                    angle=dash['angle']+elapsed*math.pi*1.5
-                    dx=p[0]-enemy[0]; dy=p[1]-enemy[1]
-                    along=dx*math.cos(angle)+dy*math.sin(angle)
-                    across=abs(-dx*math.sin(angle)+dy*math.cos(angle))
-                    if now<dash['impact'] and now>=dash.get('damage_at',0) and 0<along<18 and across<.45 and abs(self.g.z)<.26 and self._los(enemy,p):
-                        self.g.hurt(12); dash['damage_at']=now+500
+                    self._update_laser(enemy,dash,now)
                     if now>=dash['recover']: self.boss_pattern.pop(id(enemy),None)
                     continue
                 if dash.get('skill')=='split':
@@ -200,7 +276,8 @@ class CombatSystem:
                         enemy[0],enemy[1]=x,y
                 if now>=dash['impact'] and not dash['hit']:
                     dash['hit']=True
-                    if math.hypot(p[0]-enemy[0],p[1]-enemy[1])<1.35 and self._los(enemy,p): self.g.hurt(18)
+                    self.boss_impacts.append((*enemy[:2],'hunter_charge',now+450,self.CHARGE_RADIUS))
+                    if math.hypot(p[0]-enemy[0],p[1]-enemy[1])<self.CHARGE_RADIUS and self._los(enemy,p): self.g.hurt(18,source=enemy[:2])
                 if now>=dash['recover']: self.boss_pattern.pop(id(enemy),None)
                 continue
             if dash and now<dash[0]:
@@ -209,36 +286,53 @@ class CombatSystem:
                 if self._los(enemy,(nx,ny)):
                     enemy[0]=nx; enemy[1]=ny
                 if math.hypot(enemy[0]-p[0],enemy[1]-p[1])<.65:
-                    self.g.hurt(18); self.boss_pattern.pop(id(enemy),None)
+                    self.g.hurt(18,source=enemy[:2]); self.boss_pattern.pop(id(enemy),None)
     def boss_attack(self, enemy, now):
         if enemy is None or enemy[2]<=0: return False
         if id(enemy) in self.boss_pattern: return False
         p=getattr(self.g,'player',[0,0]); ang=math.atan2(p[1]-enemy[1],p[0]-enemy[0]); typ=(getattr(self.g,'wave',1)//5-1)%5
         cycle=self.boss_cycles.get(id(enemy),0); self.boss_cycles[id(enemy)]=cycle+1
-        phase=cycle%3
+        skills=BOSS_DESIGNS[typ]['skills']
+        phase=cycle%len(skills);preferred=skills[phase]
+        telegraph=BOSS_TELEGRAPH[typ] if typ<len(BOSS_TELEGRAPH) and BOSS_TELEGRAPH[typ].get('enabled') else None
         # Each encounter has a signature attack, rather than only rearranging
         # the same projectile patterns. Low health changes the signature rhythm.
-        if phase==0 or (typ in (0,3,4) and phase==2):
-            skill=('hammer','hunt','snipe','brood','duel')[typ]
+        if preferred in ('hammer','hunt','snipe','brood','duel'):
+            skill=preferred
             enraged=enemy[2]<=enemy[4]*.5
             delay=(1500,1250,1700,1900,1450)[typ]
-            self.g.sound('boss_charge')
+            if telegraph: delay=self.WINDUP_ENRAGED if enraged else self.WINDUP_SIGNATURE
+            self.g.sound('boss_'+skill if telegraph else 'boss_charge')
             self.boss_pattern[id(enemy)]=dict(skill=skill,origin=tuple(enemy[:2]),target=tuple(p),angle=ang,
                 windup=now+delay,impact=now+delay+1800,recover=now+delay+2900,
-                hit=False,stage=0,enraged=enraged)
-            self.g.message=('巨像：三连地锤 · 跳过震荡，末击后反击','猎王：锁点突扑 · 横移避开猎杀路径',
-                '审判官：贯穿狙击 · 躲入掩体','织母：孵化仪式 · 清理护卫，留意本体',
-                '执刑者：延迟剑舞 · 躲开末段再反击')[typ]
+                hit=False,stage=0,enraged=enraged,telegraph=telegraph)
+            if telegraph: self._boss_cue(telegraph['signature_cue'],now)
+            else:
+                self.g.message=('巨像：三连地锤 · 跳过震荡，末击后反击','猎王：锁点突扑 · 横移避开猎杀路径',
+                    '审判官：贯穿狙击 · 躲入掩体','织母：孵化仪式 · 清理护卫，留意本体',
+                    '执刑者：延迟剑舞 · 躲开末段再反击')[typ]
             return True
-        preferred=(('hammer','slam','hammer'),('hunt','charge','fan'),('snipe','laser','split'),('brood','fan','brood'),('duel','laser','duel'))[typ][phase]
         if preferred=='slam':
-            self.boss_pattern[id(enemy)]=dict(skill='slam',origin=tuple(enemy[:2]),target=tuple(p),windup=now+1000,impact=now+1700,recover=now+2800,hit=False)
-            self.g.message='BOSS：跃空震击 · 离开落点，落地后反击'
+            windup=now+(self.WINDUP_ENRAGED if enemy[2]<=enemy[4]*.5 else self.WINDUP_COMMON) if telegraph else now+1000
+            if telegraph: self.g.sound('boss_'+telegraph['cue'])
+            self.boss_pattern[id(enemy)]=dict(skill='slam',origin=tuple(enemy[:2]),target=tuple(p),windup=windup,impact=windup+700,recover=windup+1800,hit=False,telegraph=telegraph)
+            if telegraph: self.g.boss_cue_text=''
+            else: self.g.message='BOSS：跃空震击 · 离开落点，落地后反击'
             return True
-        tier=max(0,(self.g.wave-1)//15)
         if preferred=='laser':
-            self.boss_pattern[id(enemy)]=dict(skill='laser',origin=tuple(enemy[:2]),target=tuple(p),angle=ang,windup=now+1100,impact=now+2700,recover=now+3500,hit=False)
-            self.g.message='BOSS：旋转射线 · 蓄力后逆向绕行'
+            enraged=enemy[2]<=enemy[4]*.5
+            if typ!=2:
+                # The long reversing barrage belongs only to the third Boss.
+                self.boss_pattern[id(enemy)]=dict(skill='laser',origin=tuple(enemy[:2]),target=tuple(p),angle=ang,
+                    windup=now+1100,impact=now+2700,recover=now+3500,hit=False)
+                self.g.message='BOSS：旋转射线 · 蓄力后逆向绕行'
+                return True
+            windup=now+1500;duration=11000 if enraged else 9000
+            self.boss_pattern[id(enemy)]=dict(skill='laser',origin=tuple(enemy[:2]),target=tuple(p),angle=ang,
+                windup=windup,impact=windup+duration,recover=windup+duration+1500,hit=False,
+                beam_count=4 if enraged else 3,beam_half_width=.7 if enraged else .6,
+                rotation_speed=.16 if enraged else .14,enraged=enraged,array=True,zones=[],next_throw=windup+600)
+            self.g.message='审判激光阵列：多束缓扫 · 留意反转与投掷落点'
             return True
         if preferred=='split':
             self.boss_pattern[id(enemy)]=dict(skill='split',target=tuple(p),angle=ang,windup=now+950,impact=now+1050,recover=now+1900,hit=False)
@@ -260,9 +354,14 @@ class CombatSystem:
         elif typ==2: spreads=(0,)
         elif typ==3: spreads=(-.65,-.32,0,.32,.65)
         distance=max(.5,math.hypot(p[0]-enemy[0],p[1]-enemy[1]))
-        self.boss_pattern[id(enemy)]=dict(skill=name,target=tuple(p),angle=ang,spreads=spreads,speed=speed,vz=self.g.z*speed/distance,windup=now+750,impact=now+850,recover=now+1500,hit=False)
-        self.g.message='BOSS：'+name+' · 蓄力中，注意躲避'
+        windup=now+(self.WINDUP_ENRAGED if enemy[2]<=enemy[4]*.5 else self.WINDUP_COMMON) if telegraph else now+750
+        if telegraph: self.g.sound('boss_'+telegraph['cue'])
+        self.boss_pattern[id(enemy)]=dict(skill=name,target=tuple(p),angle=ang,spreads=spreads,speed=speed,vz=self.g.z*speed/distance,windup=windup,impact=windup+100,recover=windup+750,hit=False,telegraph=telegraph)
+        if telegraph: self.g.boss_cue_text=''
+        else: self.g.message='BOSS：'+name+' · 蓄力中，注意躲避'
         return True
+    def _boss_cue(self,text,now,duration=2000):
+        self.g.boss_cue_text=text; self.g.boss_cue_until=now+duration
     def _update_signature(self,enemy,pattern,now):
         """Timed signature attacks: finite emissions, capped damage and recovery."""
         if now>=pattern['impact']: return
@@ -290,32 +389,152 @@ class CombatSystem:
             if elapsed>=550 and not pattern['hit']:
                 self.g.sound('boss_hunt')
                 pattern['hit']=True
-                self.boss_impacts.append((*enemy[:2],'slam',now+600))
-                if math.dist(p,enemy[:2])<1.7 and self._los(enemy,p): self.g.hurt(20)
+                self.boss_impacts.append((*enemy[:2],'hunt',now+600,self.HUNT_RADIUS))
+                if math.dist(p,enemy[:2])<self.HUNT_RADIUS and self._los(enemy,p): self.g.hurt(20,source=enemy[:2])
             return
         if stage>=count or elapsed<stage*interval: return
         pattern['stage']+=1
         self.g.sound('boss_'+skill)
         if skill=='hammer':
-            radius=2.6+stage*.45
-            self.boss_impacts.append((*target,'slam',now+650))
-            if math.dist(p,target)<radius and self.g.z<.4 and self._los(enemy,p): self.g.hurt(14)
+            radius=self.hammer_radius(stage)
+            self.boss_impacts.append((*target,'slam',now+650,radius))
+            if math.dist(p,target)<radius and self.g.z<.4 and self._los(enemy,p): self.g.hurt(14,source=target)
         elif skill=='snipe':
             # Locked bearing, cover and jumping are valid responses.
             a=pattern['angle']; dx=p[0]-origin[0]; dy=p[1]-origin[1]
             along=dx*math.cos(a)+dy*math.sin(a); across=abs(-dx*math.sin(a)+dy*math.cos(a))
-            self.boss_impacts.append((*target,'beam_hit',now+350))
-            if 0<along<24 and across<.35 and abs(self.g.z)<.3 and self._los(enemy,p): self.g.hurt(16)
+            if 0<along<24 and across<self.SNIPE_HALF_WIDTH and abs(self.g.z)<.3 and self._los(enemy,p): self.g.hurt(16,source=origin)
         elif skill=='duel':
-            self.boss_impacts.append((*enemy[:2],'rupture',now+500))
-            if math.dist(p,enemy[:2])<3.3 and self.g.z<.4 and self._los(enemy,p): self.g.hurt(15)
+            self.boss_impacts.append((*enemy[:2],'rupture',now+500,self.DUEL_RADIUS))
+            if math.dist(p,enemy[:2])<self.DUEL_RADIUS and self.g.z<.4 and self._los(enemy,p): self.g.hurt(15,source=enemy[:2])
             a=pattern['angle']+(stage-1)*.25
             self._boss_projectile(enemy,a,now)
+    def _ground_polygon(self, vertices, elevation=-.495):
+        """Clip in world space so a danger zone remains visible when inside it."""
+        p=self.g.player; angle=self.g.angle
+        def depth(v): return (v[0]-p[0])*math.cos(angle)+(v[1]-p[1])*math.sin(angle)
+        clipped=[]
+        for a,b in zip(vertices,vertices[1:]+vertices[:1]):
+            da,db=depth(a),depth(b)
+            if da>=.13: clipped.append(a)
+            if (da>=.13)!=(db>=.13):
+                t=(.13-da)/(db-da)
+                clipped.append((a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t))
+        return [self.g.project(*v,elevation) for v in clipped]
+
+    def _draw_zone(self,surface,vertices,color,key=None,elevation=-.495,fill=True):
+        import pygame
+        points=self._ground_polygon(vertices,elevation)
+        if len(points)<3 or any(p is None for p in points): return
+        bounds=pygame.Rect(min(p[0] for p in points),min(p[1] for p in points),
+                           max(p[0] for p in points)-min(p[0] for p in points)+1,
+                           max(p[1] for p in points)-min(p[1] for p in points)+1)
+        bounds=bounds.clip(surface.get_rect())
+        if not bounds.width or not bounds.height: return
+        local=[(x-bounds.x,y-bounds.y) for x,y in points]
+        layer=pygame.Surface(bounds.size,pygame.SRCALPHA)
+        if fill: pygame.draw.polygon(layer,(*color,65),local)
+        art=getattr(self.g,'cloud_art',None)
+        if key and art and key in art.images:
+            texture=pygame.transform.scale(art.images[key],bounds.size)
+            mask=pygame.Surface(bounds.size,pygame.SRCALPHA)
+            pygame.draw.polygon(mask,(255,255,255,255),local)
+            texture.blit(mask,(0,0),special_flags=pygame.BLEND_RGBA_MULT)
+            layer.blit(texture,(0,0))
+        pygame.draw.polygon(layer,(*color,235),local,3)
+        surface.blit(layer,bounds)
+
+    def _draw_circle(self,surface,center,radius,key=None,color=(255,135,55)):
+        vertices=[(center[0]+math.cos(i*math.tau/96)*radius,
+                   center[1]+math.sin(i*math.tau/96)*radius) for i in range(96)]
+        self._draw_zone(surface,vertices,color,key)
+
+    def _draw_ring(self,surface,center,radius,color):
+        vertices=[(center[0]+math.cos(i*math.tau/64)*radius,
+                   center[1]+math.sin(i*math.tau/64)*radius) for i in range(64)]
+        self._draw_zone(surface,vertices,color,fill=False)
+
+    def _draw_rift(self,surface,center,radius,color):
+        import pygame
+        for i in range(8):
+            a=i*math.tau/8+self.g.now*.0012
+            inner=self.g.project(center[0]+math.cos(a)*radius*.28,center[1]+math.sin(a)*radius*.28,-.48)
+            outer=self.g.project(center[0]+math.cos(a)*radius*.94,center[1]+math.sin(a)*radius*.94,-.48)
+            if inner and outer: pygame.draw.line(surface,color,inner,outer,2)
+
+    def _draw_corridor(self,surface,origin,angle,length,half_width,active=False,color=None):
+        # LOS checks the whole prefix. Binary-search its first obstruction;
+        # avoid hundreds of full ray walks per beam per rendered frame.
+        end=length;endpoint=(origin[0]+math.cos(angle)*end,origin[1]+math.sin(angle)*end)
+        if not self._los(origin,endpoint):
+            low,high=0,length
+            for _ in range(10):
+                mid=(low+high)/2
+                if self._los(origin,(origin[0]+math.cos(angle)*mid,origin[1]+math.sin(angle)*mid)):low=mid
+                else:high=mid
+            end=low
+        vertices=[(origin[0]+math.cos(angle)*d-math.sin(angle)*side,
+                   origin[1]+math.sin(angle)*d+math.cos(angle)*side)
+                  for d,side in ((0,-half_width),(end,-half_width),(end,half_width),(0,half_width))]
+        tint=color or ((255,65,125) if active else (205,115,135))
+        self._draw_zone(surface,vertices,tint)
+        if active:
+            # A solid-looking low light wall, not just a faint floor triangle.
+            self._draw_zone(surface,vertices,tint,elevation=0)
+            for a,b in ((vertices[0],vertices[1]),(vertices[3],vertices[2])):
+                bottom=self._ground_polygon([a,b],-.49)
+                top=self._ground_polygon([b,a],.16)
+                points=bottom+top
+                if len(points)==4 and all(p is not None for p in points):
+                    import pygame
+                    layer=pygame.Surface(surface.get_size(),pygame.SRCALPHA)
+                    pygame.draw.polygon(layer,(*tint,65),points)
+                    pygame.draw.lines(layer,(*tint,230),False,top,3)
+                    surface.blit(layer,(0,0))
+
+    def _draw_laser_zones(self,surface,pattern):
+        import pygame
+        now=self.g.now;art=getattr(self.g,'cloud_art',None)
+        for zone in pattern.get('zones',[]):
+            if now>=zone['end']:continue
+            landed=now>=zone['land'];target=zone['target']
+            self._draw_circle(surface,target,self.LASER_AREA_RADIUS,color=(255,80,100) if landed else (255,190,75))
+            if not landed:
+                t=max(0,min(1,(now-zone['start'])/(zone['land']-zone['start'])))
+                origin=pattern['origin']
+                pos=(origin[0]+(target[0]-origin[0])*t,origin[1]+(target[1]-origin[1])*t)
+                point=self.g.project(*pos,-.35+math.sin(t*math.pi)*2)
+                if point:
+                    pygame.draw.circle(surface,(255,230,145),point,7)
+                    if art:art.blit(surface,'fx_boss_ammo_judge',(point[0]-18,point[1]-18,36,36))
+                self._draw_circle(surface,target,self.LASER_AREA_RADIUS*(1-t),color=(255,225,155))
+            else:
+                phase=(now-zone['land'])/(zone['end']-zone['land'])
+                self._draw_circle(surface,target,self.LASER_AREA_RADIUS*min(1,.3+phase*2),color=(255,90,125))
+
+    def draw_status(self,surface):
+        """HUD cue is separate from the world layer, so actors cannot hide it."""
+        import pygame
+        for pattern in self.boss_pattern.values():
+            if not isinstance(pattern,dict) or not pattern.get('array') or self.g.now>=pattern['impact']:continue
+            text=self.laser_status(pattern,self.g.now)
+            _,_,warning=self.laser_state(pattern,self.g.now)
+            label=self.g.font.render(text,True,(255,205,85) if warning else (255,160,190))
+            rect=label.get_rect(midtop=(surface.get_width()//2,172))
+            pygame.draw.rect(surface,(20,24,38),rect.inflate(18,8),border_radius=5)
+            surface.blit(label,rect)
+
     def draw(self, surface):
         import pygame
         art=getattr(self.g,'cloud_art',None)
         if art:
-            for x,y,key,expiry in self.boss_impacts:
+            for effect in self.boss_impacts:
+                x,y,key,expiry=effect[:4]
+                if len(effect)>4:
+                    if key in ('hunt','hunter_charge'):
+                        self._draw_circle(surface,(x,y),effect[4],'fx_signature_hunt',(255,55,95))
+                    else:self._draw_circle(surface,(x,y),effect[4],'fx_boss_'+key)
+                    continue
                 point=self.g.project(x,y,-.4)
                 distance=max(.5,math.hypot(x-self.g.player[0],y-self.g.player[1]))
                 size=min(480,max(48,int(650/distance)))
@@ -324,13 +543,30 @@ class CombatSystem:
             if art and isinstance(pattern,dict):
                 enemy=next((e for e in self._enemies() if id(e)==enemy_id and e[2]>0),None)
                 signature=pattern.get('skill')
-                if enemy and signature in ('hammer','hunt','duel') and self.g.now<pattern['windup']:
+                telegraph=pattern.get('telegraph')
+                if enemy and signature in ('hammer','hunt','duel','slam','charge') and self.g.now<pattern['impact']:
                     center=enemy[:2] if signature=='duel' else pattern['target']
-                    radius={'hammer':3.95 if pattern.get('enraged') else 3.5,'hunt':1.7,'duel':3.3}[signature]
-                    points=[self.g.project(center[0]+math.cos(i*math.tau/64)*radius,center[1]+math.sin(i*math.tau/64)*radius,-.48) for i in range(65)]
-                    for a,b in zip(points,points[1:]):
-                        if a and b: pygame.draw.line(surface,(255,125,60),a,b,3)
-                if enemy and signature in ('hammer','hunt','snipe','brood','duel'):
+                    stage=min(pattern.get('stage',0),3 if pattern.get('enraged') else 2)
+                    radius={'hammer':self.hammer_radius(stage),'hunt':self.HUNT_RADIUS,
+                            'duel':self.DUEL_RADIUS,'slam':self.SLAM_RADIUS,'charge':self.CHARGE_RADIUS}[signature]
+                    hunter=signature in ('hunt','charge')
+                    tint=telegraph['color'] if telegraph and not hunter else (255,55,95) if hunter else (255,135,55)
+                    self._draw_circle(surface,center,radius,color=tint)
+                    if telegraph and signature=='hammer' and self.g.now<pattern['windup']:
+                        self._draw_rift(surface,center,radius,telegraph['accent'])
+                        last=3 if pattern.get('enraged') else 2
+                        for future in range(stage+1,last+1):
+                            self._draw_ring(surface,center,self.hammer_radius(future),telegraph['accent'])
+                    if hunter:
+                        origin=pattern['origin'];target=pattern['target']
+                        angle=math.atan2(target[1]-origin[1],target[0]-origin[0])
+                        distance=math.dist(origin,target)
+                        self._draw_corridor(surface,origin,angle,distance,.22,color=(240,60,100))
+                if enemy and telegraph and signature not in ('hammer','hunt','duel','slam','charge','laser','split','brood','snipe') and self.g.now<pattern.get('windup',0):
+                    angle=pattern.get('angle',0.); spreads=pattern.get('spreads',(0,)); lo,hi=min(spreads),max(spreads)
+                    arc=[(enemy[0]+math.cos(angle+lo+(hi-lo)*i/8)*8.,enemy[1]+math.sin(angle+lo+(hi-lo)*i/8)*8.) for i in range(9)]
+                    self._draw_zone(surface,[enemy[:2]]+arc,telegraph['color'])
+                if enemy and signature=='brood':
                     point=self.g.project(*enemy[:2],.35)
                     if point and pattern['windup']<=self.g.now<pattern['impact'] and (self.g.now-pattern['windup'])%600<250:
                         distance=max(1,math.dist(enemy[:2],self.g.player))
@@ -338,54 +574,29 @@ class CombatSystem:
                         art.blit(surface,'fx_signature_'+signature,(point[0]-size//2,point[1]-size//2,size,size))
                 if enemy and self.g.now<pattern['windup']:
                     point=self.g.project(enemy[0],enemy[1],.5)
-                    if point: art.blit(surface,'fx_boss_charge',(point[0]-60,point[1]-60,120,120))
+                    cue='fx_signature_hunt' if (self.g.wave//5-1)%5==1 else 'fx_boss_charge'
+                    if point: art.blit(surface,cue,(point[0]-60,point[1]-60,120,120))
+                if enemy and signature=='hunt' and pattern['windup']<=self.g.now<pattern['windup']+650:
+                    point=self.g.project(enemy[0],enemy[1],.25)
+                    distance=max(1,math.dist(enemy[:2],self.g.player))
+                    size=min(340,max(65,int(600/distance)))
+                    if point:art.blit(surface,'fx_signature_hunt',(point[0]-size//2,point[1]-size//2,size,size))
                 if enemy and pattern.get('skill')=='snipe' and self.g.now<pattern['impact']:
                     origin=pattern['origin']; angle=pattern['angle']
-                    # The telegraph follows the locked shot corridor, not the
-                    # player's current location. Cover also clips the warning.
-                    previous=None
-                    for step in range(1,121):
-                        distance=step*.2
-                        location=(origin[0]+math.cos(angle)*distance,origin[1]+math.sin(angle)*distance)
-                        if not self._los(origin,location): break
-                        point=self.g.project(*location,0)
-                        if point and previous:
-                            pygame.draw.line(surface,(255,90,120),previous,point,2)
-                        previous=point
-                if pattern.get('skill') in ('slam','charge','hammer','hunt','snipe','duel','brood') and self.g.now<pattern['impact']:
+                    self._draw_corridor(surface,origin,angle,24,self.SNIPE_HALF_WIDTH,self.g.now>=pattern['windup'])
+                if pattern.get('skill')=='brood' and self.g.now<pattern['impact']:
                     point=self.g.project(*pattern['target'],-.48)
                     distance=max(.5,math.hypot(pattern['target'][0]-self.g.player[0],pattern['target'][1]-self.g.player[1]))
                     size=min(400,max(24,int(500/distance)))
                     if point: art.blit(surface,'fx_boss_warning',(point[0]-size//2,point[1]-size//4,size,size//2))
             if isinstance(pattern,dict) and pattern.get('skill')=='laser':
-                origin=pattern['origin']; elapsed=max(0,min(1,(self.g.now-pattern['windup'])/1600))
-                angle=pattern['angle']+elapsed*math.pi*1.5
-                start=self.g.project(*origin,.65)
-                end=origin
-                for i in range(1,181):
-                    candidate=(origin[0]+math.cos(angle)*i*.1,origin[1]+math.sin(angle)*i*.1)
-                    if not self._los(origin,candidate): break
-                    end=candidate
-                finish=self.g.project(*end,.65)
                 if self.g.now<pattern['impact']:
-                    # Project both world-space edges of the same .90m hit corridor.
-                    edges=[]
-                    for side in (-.45,.45):
-                        for distance in (.3,math.hypot(end[0]-origin[0],end[1]-origin[1])):
-                            point=self.g.project(origin[0]+math.cos(angle)*distance-math.sin(angle)*side,origin[1]+math.sin(angle)*distance+math.cos(angle)*side,.65)
-                            edges.append(point)
-                    if all(point is not None for point in edges):
-                        color=(255,70,140) if self.g.now>=pattern['windup'] else (170,80,110)
-                        pygame.draw.polygon(surface,color,[edges[0],edges[1],edges[3],edges[2]],2)
-                    elif start and finish:
-                        pygame.draw.line(surface,(255,70,140),start,finish,2)
-                    art=getattr(self.g,'cloud_art',None)
-                    beam=art.images.get('fx_laser') if art else None
-                    if beam and start and finish and self.g.now>=pattern['windup']:
-                        length=min(2200,max(1,int(math.hypot(finish[0]-start[0],finish[1]-start[1]))))
-                        angle=math.degrees(math.atan2(start[1]-finish[1],finish[0]-start[0]))
-                        image=pygame.transform.rotate(pygame.transform.scale(beam,(length,20)),angle)
-                        surface.blit(image,image.get_rect(center=((start[0]+finish[0])//2,(start[1]+finish[1])//2)))
+                    _,_,warning=self.laser_state(pattern,self.g.now)
+                    for angle in self.laser_rays(pattern,self.g.now):
+                        self._draw_corridor(surface,pattern['origin'],angle,self.LASER_LENGTH,
+                            pattern.get('beam_half_width',self.LASER_HALF_WIDTH),self.g.now>=pattern['windup'],
+                            color=(255,200,60) if warning else (255,65,125))
+                    self._draw_laser_zones(surface,pattern)
             if art: continue
             if not isinstance(pattern,dict) or pattern.get('skill')!='charge' or self.g.now>=pattern['impact']: continue
             points=[self.g.project(pattern['target'][0]+math.cos(i*math.tau/32)*1.35,pattern['target'][1]+math.sin(i*math.tau/32)*1.35,-.48) for i in range(33)]

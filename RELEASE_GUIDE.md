@@ -32,6 +32,14 @@ Boss 额外奖励只抽强化：每卡稀有5%、史诗45%、传说50%，不以�
 
 ## 打包与检查
 
+### 桌面版（免安装 Python）
+
+在项目终端运行 `python -m PyInstaller RogueFPS.spec --noconfirm`，产物为 `dist/RogueFPS/` 文件夹，双击其中的 `RogueFPS.exe` 即可运行。分发时必须复制整个文件夹，不能只拷贝 exe。
+
+exe 图标与游戏窗口图标由 `RogueFPS.ico` 提供，可用 `python tools/make_icon.py` 从主角立绘重新生成。打包只包含运行所需的 `Assets/Art/pixel_portal_v1/runtime`、三张近战参考图和 `Assets/audio`，不包含 source 原始素材与测试脚本。存档 `profile.json` 写在 exe 同目录；首次启动需加载约 86MB 资源，可能等待数十秒，之后启动会更快。
+
+### 源码版
+
 在项目终端运行 `powershell -ExecutionPolicy Bypass -File build_source_release.ps1`，生成 dist 下的源码 ZIP 和 SHA256。默认排除许可待核实的背景音乐；开发目录仍可正常播放音乐。生成包没有音乐时可正常运行枪声与其他音效。
 
 开发目录运行回归：`python -m unittest -v test_game`。内容审计：`python tools/balance_audit.py`。自动测试采用无窗口/模拟音频，不替代真实鼠标手感、显示器与音箱检查。测试脚本不包含在玩家源码包中。
