@@ -99,51 +99,67 @@ class MapArt:
 
     def draw_obstacles(self,g):
         w,h=g.screen.get_size()
-        focal=w/(2*math.tan(math.pi/6))*(2.5 if g.ads and g.weapon_index==3 else 1.4 if g.ads else 1)
-        zoom=focal/(w/(2*math.tan(math.pi/6)))
+        base=w/(2*math.tan(math.pi/6))
+        focal=base*(2.5 if g.ads and g.weapon_index==3 else 1.4 if g.ads else 1)
+        zoom=focal/base
         horizon=h/2+g.pitch*h*.72
-        # Ray/box intersections: visible pixels use the collision box itself.
-        for x in range(0,w,2):
-            side=(x+.5-w/2)/focal
-            dx=math.cos(g.angle)-side*math.sin(g.angle); dy=math.sin(g.angle)+side*math.cos(g.angle)
-            hits=[]
-            for cx,cy in g.terrain_cells:
-                ax=(cx-g.player[0])/dx if abs(dx)>1e-9 else -math.inf
-                bx=(cx+1-g.player[0])/dx if abs(dx)>1e-9 else math.inf
-                ay=(cy-g.player[1])/dy if abs(dy)>1e-9 else -math.inf
-                by=(cy+1-g.player[1])/dy if abs(dy)>1e-9 else math.inf
-                if abs(dx)<=1e-9 and not cx<=g.player[0]<=cx+1: continue
-                if abs(dy)<=1e-9 and not cy<=g.player[1]<=cy+1: continue
-                entry=max(min(ax,bx),min(ay,by))
-                near=max(entry,.12); far=min(max(ax,bx),max(ay,by))
-                if near>far: continue
-                top=int(horizon+(g.z+.5-g.wall_height)*h*.55*zoom/near)
-                bottom=int(horizon+(g.z+.5)*h*.55*zoom/near)
-                back=int(horizon+(g.z+.5-g.wall_height)*h*.55*zoom/far)
-                hitx=g.player[0]+dx*near; hity=g.player[1]+dy*near
-                u=hity-cy if min(ax,bx)>min(ay,by) else hitx-cx
-                hits.append((near,top,bottom,back,u,cx,cy,entry))
-            for near,top,bottom,back,u,cx,cy,entry in sorted(hits,reverse=True):
-                texture=self.images['metal']
-                col=texture.subsurface((min(texture.get_width()-1,max(0,int(u*(texture.get_width()-1)))),0,1,texture.get_height()))
+        xs=np.arange(0,w,2,dtype=np.float32)
+        side=(xs+.5-w/2)/focal
+        ca,sa=math.cos(g.angle),math.sin(g.angle)
+        dx=ca-side*sa; dy=sa+side*ca
+        px,py=g.player; scale_y=h*.55*zoom
+        # Vectorised ray/box intersections keep the per-frame Python work at one
+        # pass per terrain cell instead of one pass per column and cell.
+        hits=[]
+        for cx,cy in g.terrain_cells:
+            parallel_x=np.abs(dx)<=1e-9; parallel_y=np.abs(dy)<=1e-9
+            safe_x=np.where(parallel_x,1.0,dx); safe_y=np.where(parallel_y,1.0,dy)
+            ax=np.where(parallel_x,-np.inf,(cx-px)/safe_x)
+            bx=np.where(parallel_x,np.inf,(cx+1-px)/safe_x)
+            ay=np.where(parallel_y,-np.inf,(cy-py)/safe_y)
+            by=np.where(parallel_y,np.inf,(cy+1-py)/safe_y)
+            x_enter=np.minimum(ax,bx); x_exit=np.maximum(ax,bx)
+            y_enter=np.minimum(ay,by); y_exit=np.maximum(ay,by)
+            entry=np.maximum(x_enter,y_enter); far=np.minimum(x_exit,y_exit)
+            near=np.maximum(entry,.12)
+            mask=(near<=far)&(far>0)
+            # A ray parallel to an axis only misses when it starts outside the slab.
+            mask&=~((parallel_x&((px<cx)|(px>cx+1)))|(parallel_y&((py<cy)|(py>cy+1))))
+            cols=np.flatnonzero(mask)
+            if not len(cols): continue
+            near_c=near[cols]; far_c=far[cols]; entry_c=entry[cols]
+            top=(horizon+(g.z+.5-g.wall_height)*scale_y/near_c).astype(int)
+            bottom=(horizon+(g.z+.5)*scale_y/near_c).astype(int)
+            back=(horizon+(g.z+.5-g.wall_height)*scale_y/far_c).astype(int)
+            hitx=px+dx[cols]*near_c; hity=py+dy[cols]*near_c
+            x_face=x_enter[cols]>y_enter[cols]
+            u=np.where(x_face,hity-cy,hitx-cx)
+            for k in range(len(cols)):
+                hits.append((float(near_c[k]),int(top[k]),int(bottom[k]),int(back[k]),
+                             float(u[k]),cx,cy,float(entry_c[k]),int(xs[cols[k]]),
+                             float(dx[cols[k]]),float(dy[cols[k]])))
+        texture=self.images['metal']; tex_w=texture.get_width(); tex_h=texture.get_height()
+        top_texture=self.textures['barrier_top']; tw,th=top_texture.shape[:2]
+        for near,top,bottom,back,u,cx,cy,entry,x,dxv,dyv in sorted(hits,key=lambda item:item[0],reverse=True):
+            if entry>0:
+                col=texture.subsurface((min(tex_w-1,max(0,int(u*(tex_w-1)))),0,1,tex_h))
                 # Clip projected columns before scaling: close faces must not stop
                 # at an arbitrary 3000-pixel cap and reveal holes underneath.
-                for upper,lower in ((top,bottom),):
-                    if entry<=0: continue  # Camera above/inside footprint sees the top, not an invented near face.
-                    start=max(0,upper); end=min(h,lower)
-                    if end<=start or lower<=upper: continue
-                    v0=max(0,min(col.get_height()-1,int((start-upper)/(lower-upper)*col.get_height())))
-                    v1=max(v0+1,min(col.get_height(),math.ceil((end-upper)/(lower-upper)*col.get_height())))
+                start=max(0,top); end=min(h,bottom)
+                if end>start and bottom>top:
+                    v0=max(0,min(tex_h-1,int((start-top)/(bottom-top)*tex_h)))
+                    v1=max(v0+1,min(tex_h,math.ceil((end-top)/(bottom-top)*tex_h)))
                     patch=col.subsurface((0,v0,1,v1-v0))
                     g.screen.blit(pygame.transform.scale(patch,(min(2,w-x),end-start)),(x,start))
-                # Top is a horizontal world plane, never a stretched side column.
+            # Top is a horizontal world plane, never a stretched side column.
+            if g.z+.5>g.wall_height:
                 start=max(0,math.floor(horizon)+1,min(back,top)); end=min(h,max(back,top))
-                if end>start and g.z+.5>g.wall_height:
+                if end>start:
                     yy=np.arange(start,end,dtype=np.float32)+.5
                     denom=yy-horizon
-                    depths=(g.z+.5-g.wall_height)*h*.55*zoom/np.maximum(.001,denom)
-                    wx=g.player[0]+dx*depths; wy=g.player[1]+dy*depths
-                    tex=self.textures['barrier_top']; tw,th=tex.shape[:2]
-                    pixels=tex[np.clip(((wx-cx)*(tw-1)).astype(int),0,tw-1),np.clip(((wy-cy)*(th-1)).astype(int),0,th-1)]
+                    depths=(g.z+.5-g.wall_height)*scale_y/np.maximum(.001,denom)
+                    wx=px+dxv*depths; wy=py+dyv*depths
+                    pixels=top_texture[np.clip(((wx-cx)*(tw-1)).astype(int),0,tw-1),
+                                       np.clip(((wy-cy)*(th-1)).astype(int),0,th-1)]
                     strip=pygame.surfarray.make_surface(pixels[None,:,:])
                     g.screen.blit(pygame.transform.scale(strip,(min(2,w-x),end-start)),(x,start))
