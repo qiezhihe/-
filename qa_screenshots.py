@@ -16,7 +16,7 @@ def main():
         game.state='playing'
         game.enemies=[]
         game.unlocked_weapons=set(range(4))
-        game.reserve=2
+        game.reserve=3
         game.hp=25
         game.wave=100
         game.now=1000
