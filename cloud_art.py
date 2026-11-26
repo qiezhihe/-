@@ -4,6 +4,11 @@ import math
 import pygame
 
 class CloudArt:
+    # First-person assets sit in the lower-right corner.  Keep a small inset
+    # so the hand and weapon do not look detached from the viewport edge.
+    WEAPON_RIGHT_INSET=8
+    WEAPON_BOTTOM_INSET=8
+
     def __init__(self):
         self.images={}; self.cache={}
         self.low_frames={}
@@ -18,6 +23,12 @@ class CloudArt:
             if not p.stem.startswith(('weapon_','pet_','icon_','fx_','prop_','player_')) and not p.stem.endswith('_frame'): continue
             im=pygame.image.load(str(p)).convert_alpha()
             rgb=pygame.surfarray.pixels3d(im); alpha=pygame.surfarray.pixels_alpha(im)
+            if p.stem in ('fx_boss_slam','fx_boss_rupture'):
+                # Legacy effects retain a dark magenta key fringe; enlarging
+                # them to the real damage footprint must not enlarge that key.
+                channels=rgb.astype('int16')
+                r,g,b=channels[:,:,0],channels[:,:,1],channels[:,:,2]
+                alpha[(r>g*1.35+12)&(b>g*1.35+12)]=0
             del rgb,alpha
             bounds=im.get_rect() if p.stem.startswith(('fx_story_','fx_entrance_')) else im.get_bounding_rect(min_alpha=128)
             self.images[p.stem]=im.subsurface(bounds).copy()
@@ -128,23 +139,67 @@ class CloudArt:
                 if candidate in self.low_frames: low_key=candidate
         if name=='dagger' and low_pose=='idle' and 'low_dagger_anim_0' in self.low_frames:
             low_key='low_dagger_anim_0'
-        if name in ('smg','mg') and f'low_{name}_v9_0' in self.low_frames:
+        if name in ('smg','mg') and not g.reload_until and f'low_{name}_v9_0' in self.low_frames:
             # All poses come from the same generated design sheet.
             pose=1 if g.muzzle_until>g.now else 2 if 0<=fraction<.65 else 3 if 0<=fraction<1 else 0
             low_key=f'low_{name}_v9_{pose}'
+        if name=='mg' and 'low_mg_v11_0' in self.low_frames:
+            if g.reload_until:
+                progress=max(0,min(.999,(g.now-g.reload_start)/max(1,g.reload_duration)))
+                pose=4+min(11,int(progress*12))
+            else:
+                pose=1 if g.muzzle_until>g.now else 2 if 0<=fraction<.65 else 3 if 0<=fraction<1 else 0
+            low_key=f'low_mg_v11_{pose}'
+        if name=='mg' and g.reload_until and all(f'low_mg_reload_v16_{i}' in self.low_frames for i in range(8)):
+            # Reload takes precedence over idle / recoil, including an active
+            # muzzle timer from the last shot in the magazine.
+            progress=max(0,min(.999,(g.now-g.reload_start)/max(1,g.reload_duration)))
+            low_key=f'low_mg_reload_v16_{min(7,int(progress*8))}'
+        if name=='smg' and g.reload_until and 'low_smg_reload_v12_0' in self.low_frames:
+            progress=max(0,min(.999,(g.now-g.reload_start)/max(1,g.reload_duration)))
+            low_key=f'low_smg_reload_v12_{min(7,int(progress*8))}'
+        if name=='sniper' and 'low_sniper_v13_0' in self.low_frames:
+            if g.reload_until:
+                progress=max(0,min(.999,(g.now-g.reload_start)/max(1,g.reload_duration)))
+                pose=5+min(6,int(progress*7))
+            else:
+                pose=1 if g.muzzle_until>g.now else 2 if 0<=age<220 else 3 if 220<=age<500 else 4 if 500<=age<700 else 0
+            low_key=f'low_sniper_v13_{pose}'
+        if name=='sniper' and 'low_sniper_v14_0' in self.low_frames:
+            if g.reload_until:
+                progress=max(0,min(.999,(g.now-g.reload_start)/max(1,g.reload_duration)))
+                pose=8+min(7,int(progress*8))
+            else:
+                cycle=max(70,min(700,g.fire_delay))
+                # Never replay idle / muzzle frames partway through the bolt cycle.
+                pose=2+min(4,int(age/cycle*5)) if 0<=age<cycle else 0
+                if g.muzzle_until>g.now: pose=1
+            low_key=f'low_sniper_v14_{pose}'
         if low_key not in self.low_frames: low_key='low_'+name+'_idle'
         if low_key in self.low_frames:
             overlay_size=(int(w*.36),int(h*.34))
+            if name=='sniper' and low_key.startswith('low_sniper_v14_'):
+                # The authored canvas is square; don't flatten the long rifle.
+                overlay_size=(int(h*.45),int(h*.45))
+            if name=='mg' and low_key.startswith('low_mg_reload_v16_'):
+                overlay_size=(int(h*.45),int(h*.45))
             cachekey=(low_key,overlay_size)
             if cachekey not in self.cache:
                 if len(self.cache)>=256: self.cache.pop(next(iter(self.cache)))
                 self.cache[cachekey]=pygame.transform.scale(self.low_frames[low_key],overlay_size)
-            if name=='sword' and g.guarding:
-                # Guard shield rises into the left/center foreground while the
-                # sword remains a small visible sliver at lower right.
-                g.screen.blit(self.cache[cachekey],(w-overlay_size[0],h-overlay_size[1]-35))
-            else:
-                g.screen.blit(self.cache[cachekey],(w-overlay_size[0],h-overlay_size[1]-35))
+            frame=self.cache[cachekey]
+            # Walking adds only a restrained camera/hand bob.  It is disabled
+            # during reload so the authored hand positions remain readable.
+            walking=bool(getattr(g,'walking',False)) and not g.reload_until
+            phase=getattr(g,'walk_phase',0.0)
+            sway_x=round(math.sin(phase)*2.5) if walking else 0
+            sway_y=round(math.sin(phase*2.0)*1.5) if walking else 0
+            sway_angle=math.sin(phase)*0.9 if walking else 0
+            if sway_angle:
+                frame=pygame.transform.rotate(frame,sway_angle)
+            rect=frame.get_rect(bottomright=(w-self.WEAPON_RIGHT_INSET+sway_x,
+                                               h-self.WEAPON_BOTTOM_INSET+sway_y))
+            g.screen.blit(frame,rect)
             if g.reload_until and name in ('smg','mg'):
                 progress=max(0,min(1,(g.now-g.reload_start)/max(1,g.reload_duration)))
                 pygame.draw.rect(g.screen,(30,40,50),(w-240,h-48,210,5))
@@ -165,6 +220,11 @@ class CloudArt:
             phase=min(1,max(0,(g.now-g.reload_start)/g.reload_duration))
             angle=-25*math.sin(phase*math.pi); dy+=int(90*math.sin(phase*math.pi))
         frame=pygame.transform.rotate(frame,angle)
-        rect=frame.get_rect(midbottom=(int(w*.72)+dx,h+15+dy))
+        bob_x=round(math.sin(getattr(g,'walk_phase',0))*2.5) if getattr(g,'walking',False) else 0
+        bob_y=round(math.sin(getattr(g,'walk_phase',0)*2)*1.5) if getattr(g,'walking',False) else 0
+        bob_angle=math.sin(getattr(g,'walk_phase',0))*.9 if getattr(g,'walking',False) else 0
+        if bob_angle: frame=pygame.transform.rotate(frame,bob_angle)
+        rect=frame.get_rect(bottomright=(w-self.WEAPON_RIGHT_INSET+bob_x,
+                                          h-self.WEAPON_BOTTOM_INSET+bob_y))
         g.screen.blit(frame,rect)
         return True

@@ -214,7 +214,7 @@ class GameRegressionTests(unittest.TestCase):
     def test_attack_decoration_is_visible_but_not_hittable(self):
         e=self.enemy()
         self.g.enemies=[e]
-        for animation in ('melee','swing','fire'):
+        for shot_index,animation in enumerate(('melee','swing','fire')):
             self.g.attack_animations[id(e)]=(animation,5000)
             image,rect=self.g.enemy_visual(e)
             hit_image,hit_rect=self.g.enemy_visual(e,hit_test=True)
@@ -233,7 +233,7 @@ class GameRegressionTests(unittest.TestCase):
             e[2]=1000
             self.g.next_shot=0
             with patch.object(self.g,'enemy_visual',return_value=(hit_image,fake_rect)) as visual:
-                self.g.shoot(1000)
+                self.g.shoot(1000+shot_index*100)
             self.assertEqual(e[2],1000)
             self.assertTrue(visual.call_args.kwargs.get('hit_test'))
 

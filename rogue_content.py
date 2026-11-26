@@ -7,6 +7,8 @@ TIERS = [('普通', (80,215,125),1), ('稀有',(80,160,255),1.7), ('史诗',(245
 # Central balance knobs.  Keep progression readable: enemy health grows
 # linearly and is capped, while weapon damage leaves room for upgrades.
 BALANCE = {
+    'player_walk_speed': 1.6,
+    'player_sprint_multiplier': 2.0,
     'enemy_base_hp': 45.0,
     'enemy_hp_per_wave': 10.0,
     'elite_multiplier': 3.2,
@@ -20,9 +22,21 @@ BALANCE = {
 BOSS_DESIGNS = (
     {'name':'灰烬巨像','hp':1.00,'speed':.80,'skills':('hammer','slam','hammer')},
     {'name':'裂隙猎王','hp':1.12,'speed':1.05,'skills':('hunt','charge','fan')},
-    {'name':'猩红审判官','hp':.92,'speed':1.20,'skills':('snipe','laser','split')},
+    {'name':'猩红审判官','hp':.92,'speed':1.20,'skills':('laser','snipe','laser','split')},
     {'name':'深渊织母','hp':1.25,'speed':.72,'skills':('brood','fan','brood')},
     {'name':'星陨执刑者','hp':1.38,'speed':.95,'skills':('duel','laser','duel')},
+)
+BOSS_TELEGRAPH = (
+    dict(color=(255,120,40), accent=(255,190,90), cue='cue_colossus', motif='rift',
+         signature_cue='三连地锤 · 末击后反击', enabled=True),
+    dict(color=(255,55,95), accent=(255,140,150), cue='cue_hunter', motif='lock',
+         signature_cue='锁点突扑 · 横移避开', enabled=False),
+    dict(color=(255,215,120), accent=(255,240,190), cue='cue_judge', motif='beam',
+         signature_cue='贯穿狙击 · 躲入掩体', enabled=False),
+    dict(color=(180,120,240), accent=(140,235,180), cue='cue_weaver', motif='spore',
+         signature_cue='孵化仪式 · 清理护卫', enabled=False),
+    dict(color=(90,190,255), accent=(170,230,255), cue='cue_executioner', motif='blade',
+         signature_cue='延迟剑舞 · 躲开末段', enabled=False),
 )
 EFFECTS = [
  ('power','弹头强化','伤害 +12%'),('haste','扳机强化','射速 +10%'),
@@ -35,21 +49,30 @@ EFFECTS = [
  ('slow','冰冻弹','命中减速提高'),('burn','燃烧弹','命中持续灼烧'),
  ('poison','毒素弹','命中持续中毒'),('execute','处决协议','低血量目标额外伤害'),
  ('range','长程枪管','射程 +15%'),
- ('blue_supply','击杀补给','击杀任意敌人获得 8 备弹'),('heal','应急修复','立即恢复生命'),
+ ('blue_supply','击杀补给','击杀补充各枪独立备弹，按弹匣容量折算'),('heal','应急修复','立即恢复生命'),
  ('xp','学习芯片','经验收益提高'),('knockback','冲击弹','命中击退'),
  ('shield','波次护盾','每波恢复临时护盾'),
+ ('stamina_core','精力核心','精力上限 +15'),('stamina_regen','回能线圈','精力恢复速度 +18%'),
+ ('sprint_efficiency','轻量步伐','冲刺精力消耗 -15%'),
 ]
 UPGRADES = [(key,f'{tier}·{title}',desc,rank,scale) for key,title,desc in EFFECTS for rank,(tier,color,scale) in enumerate(TIERS)]
 WEAPONS = [
- dict(name='冲锋枪',kind='gun',damage=16,delay=100,mag=30,reload=1400,pellets=1,range=24),
- dict(name='霰弹枪',kind='gun',damage=19,delay=550,mag=10,reload=1600,pellets=9,range=22),
- dict(name='机枪',kind='gun',damage=22,delay=130,mag=80,reload=3000,pellets=1,range=32),
- dict(name='狙击枪',kind='gun',damage=115,delay=1100,mag=5,reload=2200,pellets=1,range=50),
- # Melee gets higher sustained DPS and reach, but requires positioning.
- dict(name='刀剑',kind='melee',damage=105,delay=300,mag=1,reload=0,pellets=1,range=2.7,arc=2.2),
- dict(name='回旋刀',kind='melee',damage=125,delay=430,mag=1,reload=0,pellets=1,range=8.5,arc=.55),
- dict(name='贯穿长矛',kind='melee',damage=165,delay=500,mag=1,reload=0,pellets=1,range=11,arc=.42),
- dict(name='闪现短刃',kind='melee',damage=205,delay=620,mag=1,reload=0,pellets=1,range=3.2,arc=1.05),
+ # Relative real-world roles, not a ballistics simulator: fast light pistol
+ # rounds, slow buckshot, heavy sustained rifle fire, deliberate bolt action.
+ dict(name='冲锋枪',kind='gun',damage=18,delay=80,mag=30,reload=1800,pellets=1,range=28,
+      headshot=2.,ammo='9毫米',reserve=150,reserve_max=300,automatic=True),
+ dict(name='霰弹枪',kind='gun',damage=15,delay=850,mag=8,reload=2800,pellets=8,range=20,
+      headshot=1.5,ammo='12号霰弹',reserve=32,reserve_max=64,automatic=False),
+ dict(name='机枪',kind='gun',damage=30,delay=100,mag=100,reload=4200,pellets=1,range=45,
+      headshot=2.,ammo='7.62毫米',reserve=200,reserve_max=400,automatic=True),
+ dict(name='狙击枪',kind='gun',damage=160,delay=1450,mag=5,reload=2800,pellets=1,range=70,
+      headshot=3.,ammo='狙击弹',reserve=20,reserve_max=40,automatic=False),
+ # Returning blades / blink remain authored sci-fi abilities; slower handling
+ # and distinct reach separate them from a fast automatic firearm.
+ dict(name='刀剑',kind='melee',damage=90,delay=600,mag=0,reload=0,pellets=1,range=2.3,arc=1.9),
+ dict(name='回旋刀',kind='melee',damage=100,delay=650,mag=0,reload=0,pellets=1,range=6.5,arc=.55),
+ dict(name='贯穿长矛',kind='melee',damage=145,delay=950,mag=0,reload=0,pellets=1,range=11,arc=.42),
+ dict(name='闪现短刃',kind='melee',damage=175,delay=850,mag=0,reload=0,pellets=1,range=3.2,arc=1.05),
 ]
 SPECIALS = [
  ('melee_armor','近战·护体','持近战额外减伤 +8%（上限40%）',4),
@@ -64,6 +87,7 @@ SPECIALS = [
  ('boomerang_return','回旋刀·双刃回旋','回旋刀返回时伤害 +35%',5),
  ('spear_pierce','长矛·贯星','长矛贯穿伤害 +45%',6),
  ('dagger_dash','短刃·残影','短刃冲刺距离与伤害 +30%',7),
+ ('blink_efficiency','闪现短刃·闪现节流','仅闪现短刃：闪现精力消耗 -20%',7),
  ('pellets','霰弹枪·分裂弹','霰弹枪增加弹丸',1),
  ('smg_haste','冲锋枪·疾速机匣','冲锋枪射速 +18%',0),
  ('smg_mag','冲锋枪·加长弹匣','冲锋枪弹匣 +8',0),
@@ -113,6 +137,10 @@ def upgrade_description(key, scale):
         'xp': f'击杀经验 +{pct(10)}',
         'knockback': f'命中击退强度 +{0.2*scale:g}',
         'shield': f'每波获得 {15*scale:g} 护盾',
+        'stamina_core': f'精力上限 +{int(15*scale)}',
+        'stamina_regen': f'精力恢复速度 +{pct(18)}',
+        'sprint_efficiency': f'冲刺精力消耗 -{pct(15)}',
+        'blink_efficiency': f'仅闪现短刃：闪现精力消耗 -{pct(20)}（最低4点）',
         'smg_haste': f'仅冲锋枪射速 +{pct(18)}',
         'smg_mag': f'仅冲锋枪弹匣 +{int(8*scale)} 发',
         'shot_tight': f'霰弹聚束强度 +{pct(20)}',
@@ -121,7 +149,7 @@ def upgrade_description(key, scale):
         'mg_reload': f'仅机枪装填速度 +{pct(25)}',
         'sniper_power': f'仅狙击枪伤害 +{pct(25)}',
         'sniper_haste': f'仅狙击枪射速 +{pct(20)}',
-        'blue_supply': f'每次击杀获得 {int(8*scale)} 备弹（受上限限制）',
+        'blue_supply': f'击杀给各枪补弹（冲锋枪{8*scale:g}发基准，其他按弹匣折算）',
         'orange_reset': f'击杀刷新冷却；2秒内射速 +{8*scale:g}%',
         'melee_power': '近战伤害 +20%', 'melee_haste': '近战冷却 -15%',
         'sword_arc': '刀剑攻击范围 +25%', 'boomerang_return': '回旋刀返回伤害 +35%',
